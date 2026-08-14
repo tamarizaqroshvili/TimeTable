@@ -59,6 +59,10 @@ function bearerToken(request) {
   return value.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
 
+function normalizeEtag(value) {
+  return String(value || '').trim().replace(/^W\//i, '').replace(/^"|"$/g, '');
+}
+
 function validSnapshot(data) {
   return data && Array.isArray(data.records) && Array.isArray(data.rooms) &&
     data.records.length <= 20000 && data.rooms.length <= 5000;
@@ -87,6 +91,7 @@ export default {
           headers: {
             ...JSON_HEADERS,
             etag: latest.blob.etag,
+            'x-timetable-etag': normalizeEtag(latest.blob.etag),
             'x-timetable-published-at': latest.blob.uploadedAt?.toISOString?.() || '',
           },
         });
@@ -132,8 +137,9 @@ export default {
       }
 
       const latest = await currentBlob();
-      const latestEtag = latest?.blob?.etag || '';
-      const baseEtag = String(body.baseEtag || '');
+      const latestEtagRaw = latest?.blob?.etag || '';
+      const latestEtag = normalizeEtag(latestEtagRaw);
+      const baseEtag = normalizeEtag(body.baseEtag);
       if (latestEtag !== baseEtag) {
         return json({ error: 'version_conflict', latestEtag }, 409);
       }
@@ -154,13 +160,13 @@ export default {
         contentType: 'application/json; charset=utf-8',
         allowOverwrite: Boolean(latest),
       };
-      if (latestEtag) putOptions.ifMatch = latestEtag;
+      if (latestEtagRaw) putOptions.ifMatch = latestEtagRaw;
       await put(BLOB_PATH, snapshot, putOptions);
       const saved = await currentBlob();
 
       return json({
         ok: true,
-        etag: saved?.blob?.etag || '',
+        etag: normalizeEtag(saved?.blob?.etag),
         publishedAt,
         recordCount: body.records.length,
         roomCount: body.rooms.length,
