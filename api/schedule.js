@@ -63,6 +63,36 @@ function normalizeEtag(value) {
   return String(value || '').trim().replace(/^W\//i, '').replace(/^"|"$/g, '');
 }
 
+function etagCandidates(value) {
+  const raw = String(value || '').trim();
+  const normalized = normalizeEtag(raw);
+  return [...new Set([
+    raw,
+    normalized,
+    normalized ? `"${normalized}"` : '',
+    normalized ? `W/"${normalized}"` : '',
+  ].filter(Boolean))];
+}
+
+async function putLatestSnapshot(snapshot, latestEtagRaw, latestExists) {
+  const options = {
+    access: 'private',
+    contentType: 'application/json; charset=utf-8',
+    allowOverwrite: Boolean(latestExists),
+  };
+  if (!latestEtagRaw) return put(BLOB_PATH, snapshot, options);
+  let lastConflict;
+  for (const ifMatch of etagCandidates(latestEtagRaw)) {
+    try {
+      return await put(BLOB_PATH, snapshot, { ...options, ifMatch });
+    } catch (error) {
+      if (!isWriteConflict(error)) throw error;
+      lastConflict = error;
+    }
+  }
+  throw lastConflict || new Error('etag_precondition_failed');
+}
+
 function validSnapshot(data) {
   return data && Array.isArray(data.records) && Array.isArray(data.rooms) &&
     data.records.length <= 20000 && data.rooms.length <= 5000;
@@ -155,13 +185,7 @@ export default {
         return json({ error: 'payload_too_large' }, 413);
       }
 
-      const putOptions = {
-        access: 'private',
-        contentType: 'application/json; charset=utf-8',
-        allowOverwrite: Boolean(latest),
-      };
-      if (latestEtagRaw) putOptions.ifMatch = latestEtagRaw;
-      await put(BLOB_PATH, snapshot, putOptions);
+      await putLatestSnapshot(snapshot, latestEtagRaw, latest);
       const saved = await currentBlob();
 
       return json({
